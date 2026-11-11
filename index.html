@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ashline Command</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <div id="top">
+    <div class="res" title="Supplies"><span class="ico">◆</span><b id="r-sup">0</b><i id="r-inc">+0/s</i></div>
+    <div class="res" title="Tech level — build Reactors"><span class="lbl">TECH</span><b id="r-tech">○○○</b></div>
+    <div class="res" title="Population"><span class="lbl">POP</span><b id="r-pop">0 / 40</b></div>
+    <div class="res"><span class="lbl">TIME</span><b id="r-time">0:00</b></div>
+  </div>
+  <div id="alerts"></div>
+  <div id="toast"></div>
+  <div id="powers">
+    <button class="pw" id="pw-strike" data-p="strike" title="Orbital bombardment on the target area"><div class="cd"></div><kbd>Z</kbd><b>Rail Strike</b><span id="pw-strike-s"></span></button>
+    <button class="pw" id="pw-mend" data-p="mend" title="Repairs friendly units and structures in the area"><div class="cd"></div><kbd>X</kbd><b>Nanite Mend</b><span id="pw-mend-s"></span></button>
+  </div>
+  <div id="mini"><canvas id="mm" width="240" height="180"></canvas></div>
+  <div id="cmds"></div>
+  <div id="paused">PAUSED<small>Press P to resume</small></div>
+</div>
+
+<div id="menu" class="on">
+  <div class="card">
+    <h1>ASHLINE <span>COMMAND</span></h1>
+    <p class="tag">Real-time strategy on the burning frontier</p>
+    <div class="diffs">
+      <button data-diff="easy"><b>Recruit</b><small>Relaxed opponent</small></button>
+      <button data-diff="normal"><b>Veteran</b><small>A fair fight</small></button>
+      <button data-diff="hard"><b>Warlord</b><small>Fast, rich and ruthless</small></button>
+    </div>
+    <div class="how">
+      <div>
+        <h4>Command</h4>
+        <ul>
+          <li><kbd>Drag</kbd> select units · <kbd>Double-click</kbd> all of a type</li>
+          <li><kbd>Right-click</kbd> move / attack / set rally</li>
+          <li><kbd>A</kbd> attack-move · <kbd>S</kbd> stop</li>
+          <li><kbd>F</kbd> whole army · <kbd>V</kbd> units on screen</li>
+          <li><kbd>Ctrl+1-9</kbd> set group · <kbd>1-9</kbd> recall</li>
+          <li><kbd>Z</kbd> <kbd>X</kbd> commander powers</li>
+        </ul>
+      </div>
+      <div>
+        <h4>Camera</h4>
+        <ul>
+          <li><kbd>Arrows</kbd> or screen edge to pan</li>
+          <li><kbd>Wheel</kbd> zoom · <kbd>Middle-drag</kbd> pan</li>
+          <li><kbd>Space</kbd> home base · <kbd>G</kbd> last alert</li>
+          <li><kbd>P</kbd> pause · <kbd>M</kbd> mute</li>
+        </ul>
+        <h4>Win</h4>
+        <ul><li>Build on the pads around your Citadel, claim new sites, and destroy every enemy Citadel.</li></ul>
+      </div>
+    </div>
+    <p class="tip">Infantry beat aircraft · Aircraft beat vehicles · Vehicles beat infantry</p>
+  </div>
+</div>
+
+<div id="end">
+  <div class="card">
+    <h1 id="end-title">VICTORY</h1>
+    <p class="tag" id="end-sub"></p>
+    <div id="end-stats"></div>
+    <div class="diffs"><button id="again"><b>Main menu</b></button></div>
+  </div>
+</div>
+
+<script src="js/core.js"></script>
+<script src="js/world.js"></script>
+<script src="js/sim.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/render.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
