@@ -173,6 +173,13 @@ const World = {
       }
       ctx.closePath();
     };
+    // soft contact shadow under each boulder and foundation (the 3D meshes sit on top)
+    for (const r of this.rocks) for (const b of r.blobs) this.scorchOn(ctx, r.x + b.x, r.y + b.y, b.r * 1.35, 0.5);
+    for (const s of this.sites) this.scorchOn(ctx, s.x, s.y, BASE_BLOCK_R * 1.25, 0.5);
+    this.terrain = cv;
+    this.tctx = ctx;
+    return;
+    // eslint-disable-next-line no-unreachable
     ctx.fillStyle = 'rgba(8,6,14,0.45)';
     for (const r of this.rocks) for (const b of r.blobs) { poly(r.x + b.x + 16, r.y + b.y + 22, b.r, b.s, 0.92); ctx.fill(); }
     for (const r of this.rocks) for (const b of r.blobs) {
@@ -212,10 +219,13 @@ const World = {
   },
 
   scorch(x, y, r) {
-    const ctx = this.tctx;
-    if (!ctx) return;
+    if (!this.tctx) return;
+    this.scorchOn(this.tctx, x, y, r, 0.55);
+    if (!Render.terrDirty) Render.terrDirty = performance.now();
+  },
+  scorchOn(ctx, x, y, r, a) {
     const g = ctx.createRadialGradient(x, y, r * 0.15, x, y, r);
-    g.addColorStop(0, 'rgba(8,6,6,0.55)'); g.addColorStop(1, 'rgba(8,6,6,0)');
+    g.addColorStop(0, 'rgba(8,6,6,' + a + ')'); g.addColorStop(1, 'rgba(8,6,6,0)');
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
   },

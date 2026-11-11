@@ -2,11 +2,12 @@
 
 An original real-time strategy game for the browser: fixed-pad base building, a supply economy,
 squad-based armies with infantry / vehicle / air counters, commander powers and a computer opponent.
-No build step and no dependencies.
+Rendered in 3D with procedurally built, animated models (walking squads, recoiling turrets, spinning rotors,
+working buildings). No build step; three.js is vendored in `vendor/` (MIT licence).
 
 ## Play
 
-Open `index.html` in a desktop browser (or serve the folder, e.g. `python3 -m http.server`), then pick a difficulty.
+Open `index.html` in a desktop browser with WebGL (or serve the folder, e.g. `python3 -m http.server`), then pick a difficulty.
 
 - **Goal:** destroy every enemy Citadel; you lose if all of yours fall.
 - **Build:** click an empty pad around your Citadel. Depots give supplies, Reactors raise tech (max 3),
@@ -34,7 +35,8 @@ Open `index.html` in a desktop browser (or serve the folder, e.g. `python3 -m ht
 - `js/world.js` – map generation, A* pathfinding, fog of war
 - `js/sim.js` – units, combat, production, powers
 - `js/ai.js` – computer opponent
-- `js/render.js` – canvas renderer and minimap
+- `js/models.js` – procedural 3D models and their animations
+- `js/render.js` – three.js renderer, effects, overlay and minimap
 - `js/ui.js` – input, HUD and sound
 - `js/main.js` – menu and main loop
 

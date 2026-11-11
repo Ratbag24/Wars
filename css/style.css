@@ -1,7 +1,9 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { width: 100%; height: 100%; overflow: hidden; background: #07080d; color: #e6edf2;
   font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; user-select: none; -webkit-user-select: none; }
-#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+#c, #o { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+#o { pointer-events: none; }
+#hud::before, body.demo::after { content: ''; position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 55%, #0008 100%); }
 kbd { font: 600 11px ui-monospace, Menlo, Consolas, monospace; background: #0d1217; border: 1px solid #2f3f48;
   border-radius: 4px; padding: 1px 5px; color: #b5fff4; }
 

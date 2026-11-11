@@ -39,6 +39,8 @@ const BASE_BLOCK_R = 158;
 const POP_CAP = 40;
 const MAX_TECH = 3;
 const CITADEL_COST = 400;
+const AIR_H = 70;
+const hOf = (e) => (e.air ? AIR_H : e.kind === 'bld' ? (e.type === 'citadel' ? 62 : 30) : e.cls === 'inf' ? 13 : 20);
 
 const TEAM_COL = [
   { main: '#35e0c8', dark: '#12665c', light: '#b5fff4', name: 'Vanguard Accord' },

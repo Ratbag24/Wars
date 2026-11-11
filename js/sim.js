@@ -267,7 +267,7 @@ function kill(t, src) {
     t.dead = true;
     G.teams[t.team].lost++;
     if (src) G.teams[src.team].killed++;
-    boom(t.x, t.y, t.cls === 'inf' ? 16 : t.radius * 1.9, t.cls !== 'inf');
+    boom(t.x, t.y, t.cls === 'inf' ? 16 : t.radius * 1.9, t.cls !== 'inf', t.air ? AIR_H : 0);
   } else removeBuilding(t, true);
 }
 
@@ -284,16 +284,17 @@ function removeBuilding(b, violent) {
   } else s.slots[b.slot] = null;
 }
 
-function boom(x, y, r, big) {
+function boom(x, y, r, big, h) {
+  h = h || 0;
   if (G.fx.length < 700) {
-    G.fx.push({ type: 'boom', x, y, r, t: 0, life: big ? 0.55 : 0.35 });
+    G.fx.push({ type: 'boom', x, y, h, r, t: 0, life: big ? 0.55 : 0.35 });
     const n = big ? 12 : 5;
     for (let i = 0; i < n; i++) {
       const a = Math.random() * TAU, s = 30 + Math.random() * (big ? 150 : 70);
-      G.fx.push({ type: 'p', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 20, t: 0, life: 0.4 + Math.random() * 0.6, size: 2 + Math.random() * (big ? 5 : 2.5), col: Math.random() < 0.5 ? '#ffb347' : '#5b5560', drag: 2.5 });
+      G.fx.push({ type: 'p', x, y, h, vx: Math.cos(a) * s, vy: Math.sin(a) * s, t: 0, life: 0.4 + Math.random() * 0.6, size: 2 + Math.random() * (big ? 5 : 2.5), col: Math.random() < 0.5 ? '#ffb347' : '#5b5560', drag: 2.5 });
     }
   }
-  World.scorch(x, y, r * (big ? 1.1 : 0.9));
+  if (!h) World.scorch(x, y, r * (big ? 1.1 : 0.9));
   if (Render.onScreen(x, y, 100)) Sfx.play(big ? 'boom' : 'pop');
 }
 
@@ -309,8 +310,8 @@ function fire(e, t) {
     case 'bullet': case 'turret': case 'flak':
       damage(t, d.dmg, d.dtype, e);
       if (G.fx.length < 700) {
-        G.fx.push({ type: 'tracer', x: mx, y: my, x2: t.x + jx, y2: t.y + jy, t: 0, life: 0.07, col: d.dtype === 'flak' ? '#ffe9a8' : e.team ? '#ffc7a1' : '#c9fff6' });
-        if (d.dtype === 'flak') G.fx.push({ type: 'puff', x: t.x + jx * 2, y: t.y + jy * 2, t: 0, life: 0.3, r: 9 });
+        G.fx.push({ type: 'tracer', x: mx, y: my, h: hOf(e), x2: t.x + jx, y2: t.y + jy, h2: hOf(t), t: 0, life: 0.07, col: d.dtype === 'flak' ? '#ffe9a8' : e.team ? '#ffc7a1' : '#c9fff6' });
+        if (d.dtype === 'flak') G.fx.push({ type: 'puff', x: t.x + jx * 2, y: t.y + jy * 2, h: hOf(t), t: 0, life: 0.3, r: 9 });
       }
       if (vis) Sfx.play('shot');
       break;
@@ -319,7 +320,7 @@ function fire(e, t) {
       if (G.fx.length < 700) {
         for (let i = 0; i < 2; i++) {
           const sp = 190 + Math.random() * 60, aa = a + (Math.random() - 0.5) * 0.3;
-          G.fx.push({ type: 'p', x: mx, y: my, vx: Math.cos(aa) * sp, vy: Math.sin(aa) * sp, t: 0, life: 0.45, size: 5 + Math.random() * 4, col: Math.random() < 0.5 ? '#ffd24a' : '#ff7a1f', drag: 1.5, glow: true });
+          G.fx.push({ type: 'p', x: mx, y: my, h: 4, vx: Math.cos(aa) * sp, vy: Math.sin(aa) * sp, t: 0, life: 0.45, size: 5 + Math.random() * 4, col: Math.random() < 0.5 ? '#ffd24a' : '#ff7a1f', drag: 1.5, glow: true });
         }
       }
       if (vis) Sfx.play('flame');
@@ -327,11 +328,11 @@ function fire(e, t) {
     default: {
       const spd = d.dtype === 'rocket' ? 430 : d.dtype === 'siege' ? 330 : 640;
       G.proj.push({
-        x: mx, y: my, sx: mx, sy: my, tx: t.x + jx * 0.5, ty: t.y + jy * 0.5, tgt: d.dtype === 'rocket' ? t : null,
+        x: mx, y: my, sx: mx, sy: my, h0: hOf(e), h1: hOf(t), tx: t.x + jx * 0.5, ty: t.y + jy * 0.5, tgt: d.dtype === 'rocket' ? t : null,
         spd, dmg: d.dmg, dtype: d.dtype, aoe: d.aoe || 0, team: e.team, src: e, t: 0, lob: d.dtype === 'siege' || (e.air && d.dtype === 'shell'),
         total: dist(mx, my, t.x, t.y) / spd,
       });
-      if (G.fx.length < 700) G.fx.push({ type: 'flash', x: mx, y: my, t: 0, life: 0.09, r: d.dtype === 'rocket' ? 7 : 12 });
+      if (G.fx.length < 700) G.fx.push({ type: 'flash', x: mx, y: my, h: hOf(e), t: 0, life: 0.09, r: d.dtype === 'rocket' ? 7 : 12 });
       if (vis) Sfx.play(d.dtype === 'rocket' ? 'rocket' : 'cannon');
     }
   }
@@ -357,12 +358,12 @@ function updateProjectiles(dt) {
         boom(p.tx, p.ty, p.aoe * 0.8, p.aoe > 40);
       } else {
         if (p.tgt) damage(p.tgt, p.dmg, p.dtype, p.src);
-        if (G.fx.length < 700) G.fx.push({ type: 'boom', x: p.tx, y: p.ty, r: 13, t: 0, life: 0.25 });
+        if (G.fx.length < 700) G.fx.push({ type: 'boom', x: p.tx, y: p.ty, h: p.h1, r: 13, t: 0, life: 0.25 });
         if (Render.onScreen(p.tx, p.ty, 50)) Sfx.play('pop');
       }
     } else {
       p.x += (dx / d) * step; p.y += (dy / d) * step;
-      if (p.dtype === 'rocket' && G.fx.length < 700 && Math.random() < 0.7) G.fx.push({ type: 'puff', x: p.x, y: p.y, t: 0, life: 0.35, r: 4 });
+      if (p.dtype === 'rocket' && G.fx.length < 700 && Math.random() < 0.7) G.fx.push({ type: 'puff', x: p.x, y: p.y, h: lerp(p.h0, p.h1, clamp(p.t / Math.max(0.01, p.total), 0, 1)) - 6, rise: 4, t: 0, life: 0.35, r: 4 });
     }
   }
   G.proj = G.proj.filter((p) => !p.dead);
@@ -559,7 +560,7 @@ function updateEffects(dt) {
       }
       if (Math.random() < 0.5 && G.fx.length < 700) {
         const a = Math.random() * TAU, r = Math.random() * p.radius;
-        G.fx.push({ type: 'p', x: e.x + Math.cos(a) * r, y: e.y + Math.sin(a) * r, vx: 0, vy: -40, t: 0, life: 0.9, size: 3, col: '#7dffb0', drag: 0, glow: true });
+        G.fx.push({ type: 'p', x: e.x + Math.cos(a) * r, y: e.y + Math.sin(a) * r, vx: 0, vy: 0, up: 50, t: 0, life: 0.9, size: 3, col: '#7dffb0', drag: 0, glow: true });
       }
     }
   }

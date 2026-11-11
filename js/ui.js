@@ -112,23 +112,30 @@ const UI = {
     if (s.site && s.slot >= 0 && s.site.slots[s.slot]) { s.bld = s.site.slots[s.slot]; s.site = null; s.slot = -1; }
     if (s.site && s.slot < 0 && s.site.owner !== -1) { s.bld = s.site.owner === 0 ? s.site.citadel : null; s.site = null; }
   },
-  unitAt(x, y, team) {
+  // picking is done in screen space so tall models and aircraft are hit where they are drawn
+  unitAt(sx, sy, team) {
     let best = null, bd = 1e9;
+    const z = Render.cam.z;
     for (const u of G.units) {
       if (u.team !== team) continue;
       if (team !== 0 && !Fog.visibleAt(u.x, u.y)) continue;
-      const d = dist(x, y, u.x, u.y);
-      if (d < u.radius + 8 && d < bd) { bd = d; best = u; }
+      const p = Render.toScreen(u.x, u.y, hOf(u) * 0.7);
+      const d = Math.hypot(p.x - sx, (p.y - sy) * 1.15);
+      if (p.ok && d < (u.radius + 9) * z && d < bd) { bd = d; best = u; }
     }
     return best;
   },
-  bldAt(x, y, team) {
+  bldAt(sx, sy, team) {
+    let best = null, bd = 1e9;
+    const z = Render.cam.z;
     for (const b of G.blds) {
       if (b.team !== team) continue;
       if (team !== 0 && !Fog.seenAt(b.x, b.y)) continue;
-      if (dist(x, y, b.x, b.y) < b.radius) return b;
+      const p = Render.toScreen(b.x, b.y, PAD_H + (b.type === 'citadel' ? 30 : 14));
+      const d = Math.hypot(p.x - sx, (p.y - sy) * 1.2);
+      if (p.ok && d < b.radius * z && d < bd) { bd = d; best = b; }
     }
-    return null;
+    return best;
   },
 
   /* ----- mouse ----- */
@@ -169,13 +176,17 @@ const UI = {
     if (e.button !== 0 || !d) return;
     this.drag = null;
     if (d.box) {
-      const a = Render.toWorld(Math.min(d.x0, d.x1), Math.min(d.y0, d.y1)), b = Render.toWorld(Math.max(d.x0, d.x1), Math.max(d.y0, d.y1));
-      const list = G.units.filter((u) => u.team === 0 && u.x > a.x - 6 && u.x < b.x + 6 && u.y > a.y - 6 && u.y < b.y + 6);
+      const x0 = Math.min(d.x0, d.x1) - 8, x1 = Math.max(d.x0, d.x1) + 8, y0 = Math.min(d.y0, d.y1) - 8, y1 = Math.max(d.y0, d.y1) + 8;
+      const list = G.units.filter((u) => {
+        if (u.team !== 0) return false;
+        const p = Render.toScreen(u.x, u.y, hOf(u));
+        return p.ok && p.x > x0 && p.x < x1 && p.y > y0 && p.y < y1;
+      });
       if (list.length || !d.shift) this.selectUnits(list, d.shift);
       return;
     }
     const w = Render.toWorld(d.x0, d.y0);
-    const u = this.unitAt(w.x, w.y, 0);
+    const u = this.unitAt(d.x0, d.y0, 0);
     const now = performance.now();
     if (u) {
       if (now - this.lastClick.t < 320 && this.lastClick.type === u.type) {
@@ -188,7 +199,7 @@ const UI = {
       return;
     }
     this.lastClick = { t: 0, type: null };
-    const b = this.bldAt(w.x, w.y, 0);
+    const b = this.bldAt(d.x0, d.y0, 0);
     if (b) { this.clear(); this.sel.bld = b; Sfx.play('click'); return; }
     for (const s of World.sites) {
       if (s.owner === 0 && s.citadel && !s.citadel.building) {
@@ -204,17 +215,13 @@ const UI = {
   wheel(e) {
     e.preventDefault();
     if (!G.running) return;
-    const c = Render.cam, before = Render.toWorld(e.clientX, e.clientY);
-    c.z *= e.deltaY < 0 ? 1.1 : 1 / 1.1;
-    Render.clampCam();
-    c.x = before.x - e.clientX / c.z; c.y = before.y - e.clientY / c.z;
-    Render.clampCam();
+    Render.zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.1 : 1 / 1.1);
   },
 
   command(x, y, e) {
     const s = this.sel;
     if (s.units.length) {
-      const eu = e ? this.unitAt(x, y, 1) : null, eb = e && !eu ? this.bldAt(x, y, 1) : null;
+      const eu = e ? this.unitAt(e.clientX, e.clientY, 1) : null, eb = e && !eu ? this.bldAt(e.clientX, e.clientY, 1) : null;
       const t = eu || eb;
       if (t) {
         for (const u of s.units) orderAttack(u, t);
