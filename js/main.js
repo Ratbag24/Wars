@@ -75,7 +75,11 @@ window.addEventListener('DOMContentLoaded', () => {
     G.endShown = false;
     startGame('normal', true);
   });
-  if (params.has('autoplay')) { startGame(params.get('diff') || 'normal', false); G.speed = +params.get('speed') || 1; }
-  else startGame('normal', true);
-  requestAnimationFrame(frame);
+  document.body.classList.add('loading');
+  Assets.load().then(() => {
+    document.body.classList.remove('loading');
+    if (params.has('autoplay')) { startGame(params.get('diff') || 'normal', false); G.speed = +params.get('speed') || 1; }
+    else startGame('normal', true);
+    requestAnimationFrame(frame);
+  });
 });

@@ -7,7 +7,7 @@ const CAM_FOV = 35;
 const Render = {
   cv: null, ov: null, octx: null, W: 0, H: 0, dpr: 1, cam: { x: 0, y: 0, z: 1 },
   fogCv: null, fogCtx: null, fogImg: null, mm: null, mmCtx: null, mmBg: null, frame: 0,
-  views: new Map(), lastT: 0, terrDirty: 0,
+  views: new Map(), corpses: [], lastT: 0, terrDirty: 0,
 
   init() {
     this.cv = document.getElementById('c');
@@ -98,6 +98,8 @@ const Render = {
   newMap() {
     for (const v of this.views.values()) this.dynG.remove(v.root);
     this.views.clear();
+    for (const c of this.corpses) this.dynG.remove(c.h);
+    this.corpses = [];
     while (this.staticG.children.length) {
       const o = this.staticG.children.pop();
       if (o.geometry && !o.userData.shared) o.geometry.dispose();
@@ -311,7 +313,12 @@ const Render = {
         G.fx.push({ type: 'puff', x: b.x + (Math.random() - 0.5) * b.radius, y: b.y + (Math.random() - 0.5) * b.radius, h: 24, rise: 60, t: 0, life: 1.1, r: 10, dark: true });
       }
     }
-    for (const [id, v] of this.views) if (v.stamp !== stamp) { this.dynG.remove(v.root); this.views.delete(id); }
+    for (const [id, v] of this.views) {
+      if (v.stamp === stamp) continue;
+      if (v.die && v.root.visible) { v.root.updateMatrixWorld(true); v.die(); }
+      this.dynG.remove(v.root); this.views.delete(id);
+    }
+    this.updateCorpses(dt);
     for (const [cr, m] of this.crates) {
       m.visible = !cr.taken && Fog.seenAt(cr.x, cr.y);
       if (m.visible) { m.rotation.y = G.time * 0.8 + cr.x; m.position.y = 3 + Math.sin(G.time * 3 + cr.x) * 2; }
@@ -322,6 +329,35 @@ const Render = {
     this.gl.render(this.scene, this.camera);
     this.overlay();
     if (this.frame % 3 === 0) this.minimap();
+  },
+
+  /* fallen units: play out a death animation where they fell, then sink away */
+  addCorpse(a, o) {
+    const h = a.holder;
+    h.updateMatrixWorld(true);
+    this.dynG.attach(h);
+    this.corpses.push({ a, h, t: -(o.delay || 0), life: o.life, clip: o.clip, fall: o.fall, tumble: o.tumble, smoke: o.smoke, vy: 0, played: false, sm: 0 });
+  },
+  updateCorpses(dt) {
+    for (const c of this.corpses) {
+      c.t += dt;
+      if (c.t < 0) { if (c.a.mixer) c.a.mixer.update(dt); continue; }
+      if (c.clip && !c.played) { c.played = true; c.a.play(c.clip, true); }
+      if (c.a.mixer) c.a.mixer.update(dt);
+      if (c.fall && c.h.position.y > 2) {
+        c.vy += 160 * dt; c.h.position.y = Math.max(2, c.h.position.y - c.vy * dt);
+        if (c.tumble) { c.h.rotation.x += dt * 1.4; c.h.rotation.z += dt * 0.6; }
+        if (c.h.position.y <= 2 && G.fx.length < 700) G.fx.push({ type: 'boom', x: c.h.position.x, y: c.h.position.z, h: 0, r: 34, t: 0, life: 0.45 });
+      }
+      if (c.smoke && (c.sm -= dt) <= 0 && G.fx.length < 700) {
+        c.sm = 0.25;
+        G.fx.push({ type: 'puff', x: c.h.position.x + (Math.random() - 0.5) * 14, y: c.h.position.z + (Math.random() - 0.5) * 14, h: c.h.position.y + 10, rise: 60, t: 0, life: 1.2, r: 10, dark: true });
+      }
+      if (c.t > c.life - 1.2) c.h.position.y -= dt * 14;
+      c.h.visible = Fog.visibleAt(c.h.position.x, c.h.position.z);
+      if (c.t >= c.life) { this.dynG.remove(c.h); c.dead = true; }
+    }
+    if (this.corpses.some((c) => c.dead)) this.corpses = this.corpses.filter((c) => !c.dead);
   },
 
   fog() {

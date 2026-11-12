@@ -106,3 +106,6 @@ body.demo #hud { display: none; }
   #mm { width: 160px; height: 120px; }
   #cmds { left: 190px; }
 }
+
+body.loading .diffs { opacity: .35; pointer-events: none; }
+body.loading .tag::after { content: ' · loading models…'; color: #ffd66b; }

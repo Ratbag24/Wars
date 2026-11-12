@@ -9,6 +9,7 @@ const M3 = {
     this.mat = new THREE.MeshPhongMaterial({ color: 0xa6a6a6, vertexColors: true, flatShading: true, shininess: 24, specular: 0x1c1e22 });
     this.glow = new THREE.MeshBasicMaterial({ vertexColors: true });
     this.tc = TEAM_COL.map((c) => ({ main: c.main, dark: c.dark, light: c.light }));
+    this.ringMat = TEAM_COL.map((c) => new THREE.MeshBasicMaterial({ color: c.main, transparent: true, opacity: 0.55, depthWrite: false }));
   },
   bake(parts) {
     const pos = [], nor = [], col = [];
@@ -51,224 +52,259 @@ function firedNow(v, e) {
   return f;
 }
 
+/* ================= model assets (CC0 glTF, see assets/models/README.md) ================= */
+const MODELS = {
+  soldier: { fit: 'y', size: 13.5 },
+  tank_heavy: { fit: 'h', size: 50 },
+  robot_gunner: { fit: 'h', size: 40 },
+  mech: { fit: 'y', size: 34 },
+  robot_flyer_gun: { fit: 'h', size: 42 },
+  speeder_b: { fit: 'h', size: 36 },
+  cargo_ship: { fit: 'h', size: 76 },
+};
+const TINT = {
+  soldier: { Character_Main: 'main', Pants: 'dark' },
+  tank_heavy: { Main: 'main', Main_Light: 'light', Main_Dark: 'dark' },
+  robot_gunner: { Main: 'main' },
+  robot_flyer_gun: { 'Material.001': 'main', Main: 'main' },
+  mech: { Atlas: 'wash' },
+  speeder_b: { metalRed: 'main', metal: 'dim', metalDark: 'dim', dark: 'dim' },
+  cargo_ship: { metalRed: 'main', metal: 'dim', metalDark: 'dim', dark: 'dim' },
+};
+
+const Assets = {
+  m: {},
+  load() {
+    return new Promise((res) => {
+      const loader = new THREE.GLTFLoader();
+      loader.setMeshoptDecoder(MeshoptDecoder);
+      const names = Object.keys(MODELS);
+      let left = names.length;
+      const done = () => { if (!--left) res(); };
+      for (const n of names) {
+        const bin = atob(MODEL_DATA[n]), buf = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+        loader.parse(buf.buffer, '', (g) => { this.prep(n, g); done(); }, (e) => { console.error('model failed: ' + n, e); done(); });
+      }
+    });
+  },
+  prep(n, g) {
+    const cfg = MODELS[n], sc = g.scene, v = new THREE.Vector3();
+    // some files ship their own lamps; the game lights the scene itself
+    const lamps = [];
+    sc.traverse((o) => { if (o.isLight) lamps.push(o); });
+    for (const l of lamps) l.parent.remove(l);
+    sc.updateMatrixWorld(true);
+    const box = new THREE.Box3();
+    let bones = false;
+    sc.traverse((o) => { if (o.isBone && !/^(PoleTarget|PT)/.test(o.name)) { bones = true; box.expandByPoint(o.getWorldPosition(v)); } });
+    if (!bones) box.setFromObject(sc);
+    const size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+    const s = cfg.size / (cfg.fit === 'y' ? size.y : Math.max(size.x, size.z));
+    const mats = new Set();
+    sc.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = true;
+      if (o.isSkinnedMesh) o.frustumCulled = false;
+      mats.add(o.material);
+    });
+    // the game renders without colour management, so bring the glTF colours into that space
+    for (const m of mats) {
+      m.color.convertLinearToSRGB(); m.metalness = 0; m.roughness = 0.85;
+      if (m.map) { m.map.encoding = THREE.LinearEncoding; m.map.needsUpdate = true; }
+    }
+    const clips = {};
+    for (const a of g.animations) clips[a.name.split('|').pop()] = a;
+    this.m[n] = { scene: sc, clips, s, off: new THREE.Vector3(-c.x * s, -box.min.y * s, -c.z * s), mats: [new Map(), new Map()] };
+  },
+  // a fresh, team-tinted instance wrapped in a holder that faces +x
+  make(n, team, yaw) {
+    const A = this.m[n], obj = THREE.SkeletonUtils.clone(A.scene), map = A.mats[team], T = M3.tc[team];
+    obj.traverse((o) => {
+      if (!o.isMesh) return;
+      let m = map.get(o.material);
+      if (!m) {
+        m = o.material.clone();
+        const role = (TINT[n] || {})[m.name], c = new THREE.Color(T.main);
+        if (role === 'main') m.color.copy(c).multiplyScalar(0.82);
+        else if (role === 'light') m.color.copy(c).lerp(new THREE.Color('#ffffff'), 0.3).multiplyScalar(0.85);
+        else if (role === 'dark') m.color.set(T.dark).lerp(c, 0.25);
+        else if (role === 'wash') m.color.set('#ffffff').lerp(c, 0.8);
+        else if (role === 'dim') m.color.multiplyScalar(0.55);
+        map.set(o.material, m);
+      }
+      o.material = m;
+    });
+    obj.scale.setScalar(A.s); obj.position.copy(A.off);
+    const holder = new THREE.Group();
+    holder.rotation.y = yaw === undefined ? Math.PI / 2 : yaw;
+    holder.add(obj);
+    const a = { holder, obj, mixer: null, acts: {}, cur: null };
+    if (Object.keys(A.clips).length) {
+      a.mixer = new THREE.AnimationMixer(obj);
+      a.play = (name, once, speed) => {
+        if (a.cur === name || !A.clips[name]) return;
+        const next = a.acts[name] || (a.acts[name] = a.mixer.clipAction(A.clips[name]));
+        next.reset();
+        if (once) { next.setLoop(THREE.LoopOnce, 1); next.clampWhenFinished = true; }
+        next.timeScale = speed || 1;
+        if (a.cur) next.crossFadeFrom(a.acts[a.cur], 0.16, false);
+        next.play();
+        a.cur = name;
+      };
+    }
+    return a;
+  },
+};
+
+const WRECK = () => M3.wreck || (M3.wreck = new THREE.MeshLambertMaterial({ color: 0x1d1b1c }));
+function teamRing(u, r) {
+  const g = M3.cache['ring'] || (M3.cache['ring'] = new THREE.RingGeometry(0.8, 1, 28));
+  const m = new THREE.Mesh(g, M3.ringMat[u.team]);
+  m.rotation.x = -Math.PI / 2; m.position.y = 0.7; m.scale.setScalar(r);
+  return m;
+}
+
 /* ================= units ================= */
 function makeUnitView(u) {
-  const v = { root: new THREE.Group(), rec: 0 };
+  const v = { root: new THREE.Group(), shotT: 0 };
   if (u.cls === 'inf') squadView(u, v);
-  else if (u.type === 'ranger') rangerView(u, v);
-  else if (u.type === 'kestrel') kestrelView(u, v);
-  else if (u.type === 'condor') condorView(u, v);
-  else trackedView(u, v);
+  else if (u.type === 'bastion') tankView(u, v);
+  else if (u.type === 'flakker') walkerView(u, v, 'robot_gunner', 'Walk', 'Shoot', 1.5);
+  else if (u.type === 'thumper') walkerView(u, v, 'mech', 'Walk', 'Shoot_Big', 1.1);
+  else if (u.type === 'kestrel') flyerView(u, v);
+  else craftView(u, v);
   return v;
 }
 
+const WEAPONS = ['Revolver', 'Sniper', 'Revolver_Small', 'Pistol', 'SMG', 'GrenadeLauncher', 'ShortCannon', 'Shotgun', 'Sniper_2', 'RocketLauncher', 'AK', 'Shovel', 'Knife_2', 'Knife_1'];
 function squadView(u, v) {
-  const T = M3.tc[u.team], k = u.type + ':' + u.team, n = u.d.squad;
-  const offs = n === 5 ? [[7, 0], [-3, -10], [-3, 10], [-13, -5], [-13, 6]] : [[7, 0], [-6, -9], [-6, 9]];
-  const bodyParts = () => {
-    const p = [
-      box(4, 5.2, 5.6, T.main, 0, 8.6, 0), box(1, 3, 4.2, T.dark, 2.2, 9, 0),
-      box(3.4, 3.2, 3.6, T.dark, 0.2, 12.9, 0), box(0.7, 1.1, 2.8, C_GLASS, 1.9, 13, 0),
-      box(1.4, 1.2, 6.8, C_HULL2, 0, 10.8, 0),
-    ];
-    if (u.type === 'scorcher') p.push(cyl(1.7, 1.7, 5, 6, '#e0762a', -3.2, 9.2, 0), box(1, 1, 1, C_METAL, -3.2, 12, 0));
-    else if (u.type === 'lancer') p.push(box(2.2, 4.4, 4.6, C_HULL, -3, 9, 0), box(1.2, 2, 1.2, '#d9483a', -3.2, 12, 1.2));
-    else p.push(box(2, 4, 4.2, C_HULL, -3, 9, 0));
-    return p;
-  };
-  const legParts = () => [box(2.1, 6.2, 2.1, C_HULL2, 0, -3.1, 0), box(2.8, 1.3, 2.3, C_DARK, 0.5, -5.6, 0)];
-  const gunParts = () => {
-    const arms = [box(4.6, 1.5, 1.5, T.main, 2.2, 9.6, -2.6, 0, 0.35, 0), box(4.6, 1.5, 1.5, T.main, 2.2, 9.6, 2.6, 0, -0.35, 0)];
-    if (u.type === 'lancer') return arms.concat([cylX(1.5, 13, 6, C_HULL2, 2.5, 12.4, 2.4), cylX(1.9, 2, 6, C_METAL, 9, 12.4, 2.4), box(1, 2.2, 1, C_DARK, 3, 10.8, 2.4)]);
-    if (u.type === 'scorcher') return arms.concat([box(7, 1.6, 1.6, C_DARK, 5, 9.4, 0.8), box(1.6, 2.2, 2.2, '#ff9d3b', 9, 9.4, 0.8)]);
-    return arms.concat([box(8.5, 1.5, 1.3, C_DARK, 5, 9.6, 0.8), box(1.2, 2.4, 1.1, C_DARK, 3.4, 8.4, 0.8), box(2.4, 0.8, 0.8, C_METAL, 9.8, 9.9, 0.8)]);
+  const n = Math.min(4, u.d.squad);
+  const offs = n === 4 ? [[7, -7], [7, 7], [-8, -7], [-8, 7]] : [[8, 0], [-6, -8], [-6, 8]];
+  const weapon = { trooper: 'AK', scorcher: 'ShortCannon', lancer: 'RocketLauncher' }[u.type];
+  const spawn = (i) => {
+    const a = Assets.make('soldier', u.team);
+    a.obj.traverse((o) => { if (WEAPONS.includes(o.name)) o.visible = o.name === weapon; });
+    a.holder.position.set(offs[i][0], 0, offs[i][1]);
+    a.play('Idle'); a.mixer.update(Math.random());
+    v.root.add(a.holder);
+    return a;
   };
   v.members = [];
-  for (let i = 0; i < n; i++) {
-    const g = new THREE.Group();
-    g.position.set(offs[i][0], 0, offs[i][1]);
-    g.scale.setScalar(1.25);
-    const body = M3.mesh('sol-body:' + k, bodyParts), gun = M3.mesh('sol-gun:' + k, gunParts);
-    const legL = M3.mesh('sol-leg', legParts), legR = M3.mesh('sol-leg', legParts);
-    legL.position.set(0, 6.2, -1.5); legR.position.set(0, 6.2, 1.5);
-    g.add(body, gun, legL, legR);
-    v.root.add(g);
-    v.members.push({ g, body, gun, legL, legR, ph: i * 1.9, rec: 0 });
-  }
-  v.shot = 0;
+  for (let i = 0; i < n; i++) v.members.push(spawn(i));
+  v.root.add(teamRing(u, u.radius + 3));
+  const drop = (i, delay) => {
+    const a = v.members[i];
+    if (!a) return;
+    v.members[i] = null;
+    Render.addCorpse(a, { clip: 'Death', life: 3.4, delay });
+  };
   v.update = (u, dt) => {
-    v.root.position.set(u.x, 0, u.y);
-    v.root.rotation.y = -u.dir;
+    v.root.position.set(u.x, 0, u.y); v.root.rotation.y = -u.dir;
+    if (firedNow(v, u)) v.shotT = Math.max(0.5, u.d.rof * 1.5);
+    v.shotT -= dt;
     const alive = Math.max(1, Math.ceil((n * u.hp) / u.maxHp));
-    if (firedNow(v, u)) { v.members[v.shot % alive].rec = 1; v.shot++; }
     for (let i = 0; i < n; i++) {
-      const m = v.members[i];
-      m.g.visible = i < alive;
-      if (!m.g.visible) continue;
-      m.rec = Math.max(0, m.rec - dt * 9);
-      const ph = u.anim * 13 + m.ph;
-      const sw = u.moving ? Math.sin(ph) * 0.75 : 0;
-      m.legL.rotation.z = sw; m.legR.rotation.z = -sw;
-      m.g.position.y = u.moving ? Math.abs(Math.cos(ph)) * 0.9 : 0;
-      m.body.position.y = u.moving ? 0 : Math.sin(u.anim * 2.2 + m.ph) * 0.18;
-      m.body.rotation.z = u.moving ? -0.12 : 0;
-      m.g.rotation.y = -(u.aim - u.dir);
-      m.gun.position.x = -m.rec * 1.4;
-      m.gun.rotation.z = m.rec * 0.12 + (u.moving ? Math.sin(ph * 2) * 0.03 : 0);
+      if (i >= alive) { drop(i, 0); continue; }
+      const a = v.members[i] || (v.members[i] = spawn(i));
+      a.play(u.moving ? 'Run_Gun' : v.shotT > 0 ? 'Idle_Shoot' : 'Idle', false, u.moving ? 1.25 : 1);
+      a.holder.rotation.y = Math.PI / 2 - (u.moving ? 0 : u.aim - u.dir);
+      a.mixer.update(dt);
     }
   };
+  v.die = () => { for (let i = 0; i < n; i++) drop(i, i * 0.12); };
 }
 
-function wheelMesh(r, w) {
-  return M3.mesh('wheel:' + r + ':' + w, () => [cyl(r, r, w, 10, C_DARK, 0, 0, 0, Math.PI / 2), box(r * 1.5, r * 0.45, w + 0.5, C_METAL), box(r * 0.45, r * 1.5, w + 0.5, C_METAL)]);
-}
-
-function rangerView(u, v) {
-  const T = M3.tc[u.team], k = 'ranger:' + u.team;
-  const body = M3.mesh(k, () => [
-    box(27, 4, 13, C_HULL2, 0, 7, 0), box(9, 3.4, 12, T.main, 9, 10.2, 0, 0, 0, -0.12), box(8, 3, 12, T.main, -9.5, 10, 0),
-    box(1, 8, 1, C_DARK, 3.5, 13, -5.6), box(1, 8, 1, C_DARK, 3.5, 13, 5.6), box(1, 8, 1, C_DARK, -5, 13, -5.6), box(1, 8, 1, C_DARK, -5, 13, 5.6),
-    box(10, 0.9, 12.4, C_DARK, -0.8, 17.2, 0), box(1, 4, 9, C_GLASS, 4.4, 12.5, 0, 0, 0, 0.3),
-    box(4, 3, 4, C_HULL, -1.5, 9.5, -3), box(4, 3, 4, C_HULL, -1.5, 9.5, 3),
-    box(2, 2, 12, C_METAL, 14, 6.5, 0), box(1, 1.4, 2, '#fff3c4', 13.8, 9.2, -4.5), box(1, 1.4, 2, '#fff3c4', 13.8, 9.2, 4.5),
-  ]);
-  const gun = M3.mesh('ranger-gun:' + u.team, () => [cyl(1.2, 1.6, 5, 6, C_DARK, 0, 2.5, 0), box(5, 3, 3.4, T.dark, 0, 6, 0), cylX(0.8, 12, 6, C_METAL, 7, 6.2, 0), box(2, 4, 5, C_HULL, -1.5, 6.5, 0)]);
-  gun.position.set(-9.5, 11, 0);
-  v.root.add(body, gun);
-  v.wheels = [];
-  for (const [x, z] of [[9.5, -8], [9.5, 8], [-9.5, -8], [-9.5, 8]]) {
-    const w = wheelMesh(4.6, 3.6); w.position.set(x, 4.6, z); v.root.add(w); v.wheels.push(w);
-  }
+function tankView(u, v) {
+  const a = Assets.make('tank_heavy', u.team, Math.PI);
+  v.root.add(a.holder, teamRing(u, u.radius + 6));
+  a.obj.updateMatrixWorld(true);
+  const turret = a.obj.getObjectByName('Tank_Turret'), gun = a.obj.getObjectByName('Tank_Gun');
+  // the cannon is a sibling of the turret in the file: hang it off the turret so both traverse together
+  const pivot = new THREE.Group();
+  turret.parent.add(pivot); pivot.position.copy(turret.position);
+  pivot.attach(turret); pivot.attach(gun);
+  const gunHome = gun.position.clone();
+  a.play('Tank_Forward');
+  const tracks = a.acts.Tank_Forward;
+  v.rec = 0;
   v.update = (u, dt) => {
     v.root.position.set(u.x, 0, u.y); v.root.rotation.y = -u.dir;
     if (firedNow(v, u)) v.rec = 1;
-    v.rec = Math.max(0, v.rec - dt * 10);
-    gun.rotation.y = -(u.aim - u.dir); gun.rotation.z = v.rec * 0.08;
-    const bounce = u.moving ? Math.sin(u.anim * 17) * 0.45 : 0;
-    body.position.y = bounce; gun.position.y = 11 + bounce;
-    body.rotation.z = u.moving ? Math.sin(u.anim * 9) * 0.02 : 0;
-    if (u.moving) for (const w of v.wheels) w.rotation.z -= (u.d.speed * dt) / 4.6;
+    v.rec = Math.max(0, v.rec - dt * 3.5);
+    pivot.rotation.y = -(u.aim - u.dir);
+    gun.position.copy(gunHome); gun.translateY(v.rec * 0.7);
+    a.holder.rotation.z = v.rec * v.rec * 0.035 * Math.cos(u.aim - u.dir);
+    a.holder.position.y = u.moving ? Math.sin(u.anim * 24) * 0.2 : 0;
+    tracks.paused = !u.moving;
+    a.mixer.update(dt * 1.6);
+  };
+  v.die = () => {
+    a.obj.traverse((o) => { if (o.isMesh) o.material = WRECK(); });
+    pivot.rotation.x = 0.25; pivot.rotation.z = 0.2;
+    Render.addCorpse(a, { life: 7, smoke: true });
   };
 }
 
-function trackedView(u, v) {
-  const T = M3.tc[u.team], t = u.type, k = t + ':' + u.team;
-  const L = t === 'bastion' ? 46 : t === 'thumper' ? 44 : 38, W = t === 'bastion' ? 11.5 : 9.5;
-  const tracks = () => {
-    const p = [];
-    for (const s of [-1, 1]) {
-      p.push(box(L, 7, 6.5, C_DARK, 0, 4, s * W), box(L - 6, 1.2, 7.2, C_HULL2, 0, 8, s * W));
-      p.push(box(4, 5, 6.5, C_DARK, L / 2, 4.8, s * W, 0, 0, 0.6), box(4, 5, 6.5, C_DARK, -L / 2, 4.8, s * W, 0, 0, -0.6));
-    }
-    return p;
-  };
-  let hull, turret, barrel, extra = null, by = 0, bx = 0;
-  if (t === 'bastion') {
-    hull = M3.mesh(k, () => tracks().concat([
-      box(40, 7, 18, C_HULL, 0, 10, 0), box(10, 6, 18, C_HULL, 19, 8.5, 0, 0, 0, 0.5), box(40, 1, 3, T.main, 0, 13.6, -7.4), box(40, 1, 3, T.main, 0, 13.6, 7.4),
-      box(8, 3, 14, C_HULL2, -17, 13.5, 0), cylX(1.3, 6, 6, C_DARK, -21, 12, -5), cylX(1.3, 6, 6, C_DARK, -21, 12, 5),
-    ]));
-    turret = M3.mesh('bastion-tur:' + u.team, () => [
-      box(19, 7, 15, T.main, -1, 3.5, 0), box(7, 6, 11, T.main, 9.5, 3.2, 0, 0, 0, -0.35), box(6, 3, 6, T.dark, -4, 8, 3), box(1, 7, 1, C_DARK, -9, 9, -5.5),
-      box(5, 4, 5, C_HULL2, 11, 3.5, 0), box(8, 2.4, 3, C_HULL2, -6, 7.6, -4.5),
-    ]);
-    barrel = M3.mesh('bastion-bar', () => [cylX(1.7, 26, 8, C_METAL, 13, 0, 0), cylX(2.5, 5, 8, C_DARK, 24, 0, 0)]);
-    turret.position.set(-2, 14, 0); bx = 11; by = 3.5;
-  } else if (t === 'flakker') {
-    hull = M3.mesh(k, () => tracks().concat([box(34, 6, 15, C_HULL, 0, 9.5, 0), box(9, 4, 14, T.main, 12, 13, 0, 0, 0, -0.2), box(6, 3, 13, C_HULL2, -14, 13, 0)]));
-    turret = M3.mesh('flak-tur:' + u.team, () => [cyl(6.5, 7.5, 3, 8, C_HULL2, 0, 1.5, 0), box(11, 8, 4, T.main, 0, 7, -5.5), box(11, 8, 4, T.main, 0, 7, 5.5), box(6, 5, 7, T.dark, -1, 6, 0), box(1, 4, 1, C_GLASS, 3, 10, 0)]);
-    barrel = M3.mesh('flak-bar', () => [cylX(0.9, 20, 6, C_METAL, 10, 1.6, -5.5), cylX(0.9, 20, 6, C_METAL, 10, -1.6, -5.5), cylX(0.9, 20, 6, C_METAL, 10, 1.6, 5.5), cylX(0.9, 20, 6, C_METAL, 10, -1.6, 5.5)]);
-    turret.position.set(-3, 12.5, 0); bx = 3; by = 7;
-    extra = M3.mesh('flak-dish:' + u.team, () => [box(1, 5, 1, C_DARK, 0, 2.5, 0), box(1.2, 4, 7, T.light, 0.6, 6, 0, 0, 0, -0.3)]);
-    extra.position.set(-4, 9, 0);
-  } else {
-    hull = M3.mesh(k, () => tracks().concat([
-      box(40, 6, 16, C_HULL, 0, 9.5, 0), box(10, 8, 15, T.main, 14, 15, 0), box(1, 4, 12, C_GLASS, 19.2, 16.5, 0), box(26, 2, 15, C_HULL2, -6, 13.2, 0),
-      box(3, 5, 3, C_DARK, -18, 9, -9, 0, 0, 0.3), box(3, 5, 3, C_DARK, -18, 9, 9, 0, 0, 0.3),
-    ]));
-    turret = M3.mesh('thump-tur:' + u.team, () => [cyl(7.5, 8.5, 4, 8, C_HULL2, 0, 2, 0), box(9, 7, 3, T.dark, 0, 6, -5.5), box(9, 7, 3, T.dark, 0, 6, 5.5)]);
-    barrel = M3.mesh('thump-bar', () => [cylX(4, 24, 8, C_DARK, 8, 0, 0), cylX(4.8, 4, 8, C_METAL, 19, 0, 0), cylX(4.6, 4, 8, C_HULL, -3, 0, 0)]);
-    turret.position.set(-8, 14, 0); bx = 0; by = 7;
-  }
-  barrel.position.set(bx, by, 0);
-  const pitch = t === 'thumper' ? 0.8 : t === 'flakker' ? 0.45 : 0.03;
-  barrel.rotation.z = pitch;
-  turret.add(barrel);
-  if (extra) turret.add(extra);
-  v.root.add(hull, turret);
+function walkerView(u, v, model, walk, shoot, speed) {
+  const a = Assets.make(model, u.team);
+  v.root.add(a.holder, teamRing(u, u.radius + 5));
+  v.face = u.dir;
+  a.play('Idle');
   v.update = (u, dt) => {
-    v.root.position.set(u.x, 0, u.y); v.root.rotation.y = -u.dir;
-    if (firedNow(v, u)) v.rec = 1;
-    v.rec = Math.max(0, v.rec - dt * (t === 'flakker' ? 12 : 3.2));
-    turret.rotation.y = -(u.aim - u.dir);
-    const k2 = v.rec * (t === 'thumper' ? 6 : t === 'bastion' ? 5 : 1.6);
-    barrel.position.set(bx - Math.cos(pitch) * k2, by - Math.sin(pitch) * k2, 0);
-    const rumble = u.moving ? Math.sin(u.anim * 22) * 0.25 : 0;
-    hull.position.y = rumble;
-    // the hull rocks back against the recoil
-    const kick = t === 'flakker' ? 0 : v.rec * v.rec * 0.05;
-    hull.rotation.z = kick * Math.cos(u.aim - u.dir);
-    hull.rotation.x = kick * Math.sin(u.aim - u.dir);
-    if (extra) extra.rotation.y = u.anim * 3;
+    if (firedNow(v, u)) v.shotT = Math.max(0.7, u.d.rof * 1.2);
+    v.shotT -= dt;
+    v.face = turnToward(v.face, v.shotT > 0 && !u.moving ? u.aim : u.dir, dt * 7);
+    v.root.position.set(u.x, 0, u.y); v.root.rotation.y = -v.face;
+    a.play(u.moving ? walk : v.shotT > 0 ? shoot : 'Idle', false, u.moving ? speed : 1);
+    a.mixer.update(dt);
   };
+  v.die = () => Render.addCorpse(a, { clip: 'Death', life: 4.5 });
 }
 
-function kestrelView(u, v) {
-  const T = M3.tc[u.team];
-  const body = new THREE.Group();
-  const hull = M3.mesh('kestrel:' + u.team, () => [
-    box(22, 6.5, 7.5, T.main, 0, 0, 0), box(8, 5, 6.5, T.main, 14, -0.6, 0, 0, 0, -0.18), box(7, 3.4, 5.6, C_GLASS, 9, 3.2, 0, 0, 0, -0.25),
-    box(18, 2.4, 2.6, C_HULL2, -19, 1, 0), box(5, 7, 1, T.dark, -27, 4, 0, 0, 0, 0.4), box(4, 1, 10, T.dark, -27, 1.5, 0),
-    box(7, 1.6, 32, C_HULL, 0, 2.6, 0), cyl(3.4, 3.4, 5, 8, C_HULL2, 0, 3.4, -16), cyl(3.4, 3.4, 5, 8, C_HULL2, 0, 3.4, 16),
-    box(9, 2.6, 3, C_DARK, 3, -1.2, -9), box(9, 2.6, 3, C_DARK, 3, -1.2, 9), cylX(0.7, 8, 6, C_METAL, 18, -3.4, 0), box(4, 2, 3, C_DARK, 12, -3.4, 0),
-    box(14, 1, 1, C_DARK, 0, -5.6, -3.4), box(14, 1, 1, C_DARK, 0, -5.6, 3.4), box(1, 2.4, 1, C_DARK, 5, -4.2, -3.4), box(1, 2.4, 1, C_DARK, 5, -4.2, 3.4), box(1, 2.4, 1, C_DARK, -5, -4.2, -3.4), box(1, 2.4, 1, C_DARK, -5, -4.2, 3.4),
-  ]);
-  body.add(hull);
-  v.rotors = [];
-  for (const z of [-16, 16]) {
-    const r = M3.mesh('rotor', () => [box(27, 0.5, 2.2, '#dfe6ee'), box(2.2, 0.5, 27, '#dfe6ee'), cyl(1.4, 1.4, 1.6, 6, C_DARK)]);
-    r.position.set(0, 6.6, z); r.castShadow = false; body.add(r); v.rotors.push(r);
-  }
-  v.root.add(body);
+function flyerView(u, v) {
+  const a = Assets.make('robot_flyer_gun', u.team);
+  v.root.add(a.holder);
+  a.play('Idle');
   v.pd = u.dir; v.roll = 0;
   v.update = (u, dt) => {
-    v.root.position.set(u.x, AIR_H + Math.sin(u.anim * 2.2) * 2.5, u.y); v.root.rotation.y = -u.dir;
+    if (firedNow(v, u)) v.shotT = Math.max(0.7, u.d.rof * 1.2);
+    v.shotT -= dt;
+    v.root.position.set(u.x, AIR_H - 10 + Math.sin(u.anim * 2.2) * 2.5, u.y); v.root.rotation.y = -u.dir;
     const turn = dt > 0 ? angDiff(v.pd, u.dir) / dt : 0; v.pd = u.dir;
     v.roll += (clamp(turn * 0.18, -0.5, 0.5) - v.roll) * Math.min(1, dt * 6);
-    body.rotation.x = v.roll;
-    v.pitch = (v.pitch || 0) + ((u.moving ? -0.2 : 0) - (v.pitch || 0)) * Math.min(1, dt * 4);
-    body.rotation.z = v.pitch;
-    v.rotors[0].rotation.y += dt * 34; v.rotors[1].rotation.y -= dt * 34;
+    a.holder.rotation.x = v.roll;
+    a.holder.rotation.z = u.moving ? -0.22 : 0;
+    a.play(v.shotT > 0 ? 'Shoot' : u.moving ? 'Run' : 'Idle');
+    a.mixer.update(dt);
   };
+  v.die = () => Render.addCorpse(a, { clip: 'Dead', life: 4, fall: true });
 }
 
-function condorView(u, v) {
-  const T = M3.tc[u.team];
+function craftView(u, v) {
+  const condor = u.type === 'condor';
+  const a = Assets.make(condor ? 'cargo_ship' : 'speeder_b', u.team, -Math.PI / 2);
   const body = new THREE.Group();
-  const hull = M3.mesh('condor:' + u.team, () => [
-    box(52, 8, 15, T.main, 0, 0, 0), box(12, 6, 12, T.main, 30, -0.8, 0, 0, 0, -0.14), box(9, 3.6, 9, C_GLASS, 25, 4, 0, 0, 0, -0.2),
-    box(20, 2.4, 36, C_HULL, -4, 2, -24, 0, -0.35, 0), box(20, 2.4, 36, C_HULL, -4, 2, 24, 0, 0.35, 0),
-    box(16, 1, 30, T.dark, -6, 3.4, -24, 0, -0.35, 0), box(16, 1, 30, T.dark, -6, 3.4, 24, 0, 0.35, 0),
-    box(9, 10, 1.4, T.dark, -24, 7, -5, 0, 0, 0.35), box(9, 10, 1.4, T.dark, -24, 7, 5, 0, 0, 0.35),
-    box(26, 3, 10, C_DARK, 0, -4.6, 0), box(30, 3, 3, C_HULL2, 0, 5, 0),
-    cylX(3.6, 12, 8, C_HULL2, -10, -1, -18), cylX(3.6, 12, 8, C_HULL2, -10, -1, 18), cylX(3.6, 12, 8, C_HULL2, -15, -1, -32), cylX(3.6, 12, 8, C_HULL2, -15, -1, 32),
-  ]);
-  body.add(hull);
-  body.scale.setScalar(0.8);
+  body.add(a.holder);
   v.jets = [];
-  for (const [x, z] of [[-17, -18], [-17, 18], [-22, -32], [-22, 32]]) {
-    const j = M3.mesh('jet', () => [cylX(2.8, 5, 8, '#7fd8ff')], true);
-    j.position.set(x, -1, z); body.add(j); v.jets.push(j);
+  for (const z of condor ? [-13, 13] : [-7, 7]) {
+    const j = M3.mesh('jet', () => [cylX(2.6, 6, 8, '#7fd8ff')], true);
+    j.position.set(condor ? -38 : -19, condor ? 10 : 5, z); body.add(j); v.jets.push(j);
   }
   v.root.add(body);
+  if (!condor) v.root.add(teamRing(u, u.radius + 5));
   v.pd = u.dir; v.roll = 0;
+  const alt = condor ? AIR_H - 4 : 5;
   v.update = (u, dt) => {
-    v.root.position.set(u.x, AIR_H + 10 + Math.sin(u.anim * 1.3) * 2, u.y); v.root.rotation.y = -u.dir;
+    v.root.position.set(u.x, 0, u.y); v.root.rotation.y = -u.dir;
+    body.position.y = alt + Math.sin(u.anim * (condor ? 1.3 : 3)) * (condor ? 2 : 1);
     const turn = dt > 0 ? angDiff(v.pd, u.dir) / dt : 0; v.pd = u.dir;
-    v.roll += (clamp(turn * 0.25, -0.35, 0.35) - v.roll) * Math.min(1, dt * 3);
+    v.roll += (clamp(turn * 0.2, -0.45, 0.45) - v.roll) * Math.min(1, dt * 4);
     body.rotation.x = v.roll;
-    for (let i = 0; i < 4; i++) { const s = (u.moving ? 1.5 : 0.8) + Math.sin(u.anim * 30 + i) * 0.25; v.jets[i].scale.set(s, 1, 1); }
+    body.rotation.z = !condor && u.moving ? -0.07 : 0;
+    for (let i = 0; i < v.jets.length; i++) v.jets[i].scale.set((u.moving ? 1.6 : 0.7) + Math.sin(u.anim * 30 + i) * 0.25, 1, 1);
   };
+  if (condor) v.die = () => { a.obj.traverse((o) => { if (o.isMesh) o.material = WRECK(); }); Render.addCorpse({ holder: body }, { life: 5, fall: true, tumble: true, smoke: true }); };
 }
 
 /* ================= buildings ================= */

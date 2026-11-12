@@ -2,8 +2,9 @@
 
 An original real-time strategy game for the browser: fixed-pad base building, a supply economy,
 squad-based armies with infantry / vehicle / air counters, commander powers and a computer opponent.
-Rendered in 3D with procedurally built, animated models (walking squads, recoiling turrets, spinning rotors,
-working buildings). No build step; three.js is vendored in `vendor/` (MIT licence).
+Rendered in 3D. Units use public-domain (CC0) animated models by Quaternius and Kenney, with run, shoot, idle
+and death animations; buildings are built procedurally in code. No build step; three.js and its glTF loader
+are vendored in `vendor/` (MIT licence). Model credits are in `assets/models/README.md`.
 
 ## Play
 
@@ -35,7 +36,8 @@ Open `index.html` in a desktop browser with WebGL (or serve the folder, e.g. `py
 - `js/world.js` – map generation, A* pathfinding, fog of war
 - `js/sim.js` – units, combat, production, powers
 - `js/ai.js` – computer opponent
-- `js/models.js` – procedural 3D models and their animations
+- `js/models.js` – model loading, unit animation and procedural buildings
+- `assets/models/` – the CC0 unit models; `js/model-data.js` is generated from them by `node tools/pack-models.js`
 - `js/render.js` – three.js renderer, effects, overlay and minimap
 - `js/ui.js` – input, HUD and sound
 - `js/main.js` – menu and main loop
