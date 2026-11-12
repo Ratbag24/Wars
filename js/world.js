@@ -153,6 +153,19 @@ const World = {
     }
     ctx.putImageData(img, 0, 0);
     ctx.scale(S, S);
+    // glowing crystal clusters grow along the mineral veins, loose stones everywhere else
+    this.crystals = []; this.pebbles = [];
+    for (let i = 0; i < 9000 && this.crystals.length < 170; i++) {
+      const x = 60 + rng() * (WORLD_W - 120), y = 60 + rng() * (WORLD_H - 120);
+      if (Math.abs(noise((x * S) / 260 + 40, (y * S) / 260 + 40) - 0.5) > 0.022) continue;
+      if (this.sites.some((s) => dist(x, y, s.x, s.y) < BASE_BLOCK_R + 30)) continue;
+      this.crystals.push({ x, y, s: 0.6 + rng() * 1.1, r: rng() * 1000 });
+    }
+    for (let i = 0; i < 700; i++) {
+      const x = 40 + rng() * (WORLD_W - 80), y = 40 + rng() * (WORLD_H - 80);
+      if (this.sites.some((s) => dist(x, y, s.x, s.y) < BASE_BLOCK_R + 10)) continue;
+      this.pebbles.push({ x, y, s: 2 + rng() * rng() * 9, r: rng() * 1000 });
+    }
     // craters / decoration
     for (let i = 0; i < 90; i++) {
       const x = rng() * WORLD_W, y = rng() * WORLD_H, r = 10 + rng() * 34;
@@ -220,8 +233,7 @@ const World = {
 
   scorch(x, y, r) {
     if (!this.tctx) return;
-    this.scorchOn(this.tctx, x, y, r, 0.55);
-    if (!Render.terrDirty) Render.terrDirty = performance.now();
+    Render.addScorch(x, y, r);
   },
   scorchOn(ctx, x, y, r, a) {
     const g = ctx.createRadialGradient(x, y, r * 0.15, x, y, r);

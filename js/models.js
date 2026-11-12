@@ -157,6 +157,11 @@ const Assets = {
   },
 };
 
+function dust(v, u, dt, r) {
+  if (!u.moving || (v.dustT = (v.dustT || 0) - dt) > 0 || G.fx.length > 600) return;
+  v.dustT = 0.09;
+  G.fx.push({ type: 'puff', x: u.x - Math.cos(u.dir) * u.radius + (Math.random() - 0.5) * 10, y: u.y - Math.sin(u.dir) * u.radius + (Math.random() - 0.5) * 10, h: 0, rise: 16, t: 0, life: 0.7, r, dust: true });
+}
 const WRECK = () => M3.wreck || (M3.wreck = new THREE.MeshLambertMaterial({ color: 0x1d1b1c }));
 function teamRing(u, r) {
   const g = M3.cache['ring'] || (M3.cache['ring'] = new THREE.RingGeometry(0.8, 1, 28));
@@ -237,6 +242,7 @@ function tankView(u, v) {
     a.holder.rotation.z = v.rec * v.rec * 0.035 * Math.cos(u.aim - u.dir);
     a.holder.position.y = u.moving ? Math.sin(u.anim * 24) * 0.2 : 0;
     tracks.paused = !u.moving;
+    dust(v, u, dt, 12);
     a.mixer.update(dt * 1.6);
   };
   v.die = () => {
@@ -302,6 +308,7 @@ function craftView(u, v) {
     v.roll += (clamp(turn * 0.2, -0.45, 0.45) - v.roll) * Math.min(1, dt * 4);
     body.rotation.x = v.roll;
     body.rotation.z = !condor && u.moving ? -0.07 : 0;
+    if (!condor) dust(v, u, dt, 8);
     for (let i = 0; i < v.jets.length; i++) v.jets[i].scale.set((u.moving ? 1.6 : 0.7) + Math.sin(u.anim * 30 + i) * 0.25, 1, 1);
   };
   if (condor) v.die = () => { a.obj.traverse((o) => { if (o.isMesh) o.material = WRECK(); }); Render.addCorpse({ holder: body }, { life: 5, fall: true, tumble: true, smoke: true }); };

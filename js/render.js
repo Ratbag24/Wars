@@ -7,7 +7,7 @@ const CAM_FOV = 35;
 const Render = {
   cv: null, ov: null, octx: null, W: 0, H: 0, dpr: 1, cam: { x: 0, y: 0, z: 1 },
   fogCv: null, fogCtx: null, fogImg: null, mm: null, mmCtx: null, mmBg: null, frame: 0,
-  views: new Map(), corpses: [], lastT: 0, terrDirty: 0,
+  views: new Map(), corpses: [], scorches: [], lastT: 0, terrDirty: 0,
 
   init() {
     this.cv = document.getElementById('c');
@@ -38,6 +38,14 @@ const Render = {
     this.staticG = new THREE.Group(); this.dynG = new THREE.Group();
     this.scene.add(this.staticG, this.dynG);
     this.initFx();
+    // bloom: bright things (tracers, explosions, reactor cores, engines) glow
+    if (THREE.EffectComposer && !new URLSearchParams(location.search).has('nofx')) {
+      const rt = new THREE.WebGLRenderTarget(4, 4, { samples: 4 });
+      this.composer = new THREE.EffectComposer(gl, rt);
+      this.composer.addPass(new THREE.RenderPass(this.scene, this.camera));
+      this.bloom = new THREE.UnrealBloomPass(new THREE.Vector2(256, 256), 0.6, 0.55, 0.8);
+      this.composer.addPass(this.bloom);
+    }
     this.resize();
     window.addEventListener('resize', () => this.resize());
   },
@@ -47,6 +55,7 @@ const Render = {
     this.W = window.innerWidth; this.H = window.innerHeight;
     this.gl.setPixelRatio(dpr);
     this.gl.setSize(this.W, this.H, false);
+    if (this.composer) { this.composer.setPixelRatio(dpr); this.composer.setSize(this.W, this.H); }
     this.ov.width = this.W * dpr; this.ov.height = this.H * dpr;
     this.camera.aspect = this.W / this.H;
     this.camera.updateProjectionMatrix();
@@ -106,8 +115,19 @@ const Render = {
       if (o.material && o.material.map) o.material.map.dispose();
     }
     // ground
-    const tex = (this.terrTex = new THREE.CanvasTexture(World.terrain));
-    tex.anisotropy = 4; tex.generateMipmaps = true;
+    // ground texture: the painted colour map upscaled, with a tiling surface-detail layer blended over it
+    const maxT = this.gl.capabilities.maxTextureSize, ts = maxT >= 4096 ? 1 : 0.5;
+    const gc = document.createElement('canvas');
+    gc.width = WORLD_W * ts; gc.height = WORLD_H * ts;
+    const gx = gc.getContext('2d');
+    gx.imageSmoothingQuality = 'high';
+    gx.drawImage(World.terrain, 0, 0, gc.width, gc.height);
+    gx.globalCompositeOperation = 'overlay';
+    gx.fillStyle = gx.createPattern(this.detailTile(), 'repeat');
+    gx.fillRect(0, 0, gc.width, gc.height);
+    gx.globalCompositeOperation = 'source-over';
+    const tex = (this.terrTex = new THREE.CanvasTexture(gc));
+    tex.anisotropy = Math.min(8, this.gl.capabilities.getMaxAnisotropy()); tex.generateMipmaps = true;
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_W, WORLD_H), new THREE.MeshLambertMaterial({ map: tex }));
     ground.rotation.x = -Math.PI / 2; ground.position.set(WORLD_W / 2, 0, WORLD_H / 2); ground.receiveShadow = true;
     const skirt = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_W * 4, WORLD_H * 4), new THREE.MeshBasicMaterial({ color: 0x0b0a10 }));
@@ -148,6 +168,25 @@ const Render = {
     const pads = new THREE.Mesh(M3.bake(parts), M3.mat);
     pads.receiveShadow = true; pads.castShadow = true;
     this.staticG.add(pads);
+    // crystals (unlit, so they glow through the bloom pass) and loose stones
+    const cp = [], pp = [];
+    for (const k of World.crystals) {
+      const n = 2 + ((k.r * 7) % 3 | 0);
+      for (let i = 0; i < n; i++) {
+        const a = k.r + i * 2.4, d = i ? 5 + ((k.r * (i + 3)) % 7) : 0, h = (7 + ((k.r * (i + 1)) % 9)) * k.s;
+        cp.push(cyl(0.1, 2.4 * k.s, h, 5, i % 2 ? '#2fd0c0' : '#7ff5e6', k.x + Math.cos(a) * d, h / 2, k.y + Math.sin(a) * d, Math.sin(a) * 0.3, a, Math.cos(a) * 0.3));
+      }
+    }
+    for (const k of World.pebbles) {
+      pp.push({ g: new THREE.IcosahedronGeometry(k.s, 0), c: (k.r | 0) % 2 ? '#6d5c58' : '#4f444a', p: [k.x, k.s * 0.25, k.y], r: [k.r, k.r * 2, k.r * 3] });
+    }
+    const cm = new THREE.Mesh(M3.bake(cp), new THREE.MeshBasicMaterial({ vertexColors: true }));
+    const pm = new THREE.Mesh(M3.bake(pp), M3.mat);
+    pm.castShadow = pm.receiveShadow = true;
+    this.staticG.add(cm, pm);
+    // scorch decals
+    for (const d of this.scorches) this.scene.remove(d);
+    this.scorches = [];
     // crates
     this.crates = [];
     for (const cr of World.crates) {
@@ -173,6 +212,61 @@ const Render = {
     this.mmBg = mc;
   },
 
+  detailTile() {
+    if (this._tile) return this._tile;
+    const N = 512, c = document.createElement('canvas');
+    c.width = c.height = N;
+    const x = c.getContext('2d'), img = x.createImageData(N, N), d = img.data, rng = makeRng(99);
+    const g = new Float32Array(N * N);
+    // layered tileable grain
+    for (const [cells, amp] of [[8, 0.35], [24, 0.3], [72, 0.22], [200, 0.16]]) {
+      const lat = new Float32Array(cells * cells);
+      for (let i = 0; i < lat.length; i++) lat[i] = rng();
+      for (let py = 0; py < N; py++) for (let px = 0; px < N; px++) {
+        const fx = (px / N) * cells, fy = (py / N) * cells, x0 = fx | 0, y0 = fy | 0, x1 = (x0 + 1) % cells, y1 = (y0 + 1) % cells;
+        let tx = fx - x0, ty = fy - y0; tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+        const a = lat[y0 * cells + x0], b = lat[y0 * cells + x1], e = lat[y1 * cells + x0], f = lat[y1 * cells + x1];
+        g[py * N + px] += (a + (b - a) * tx + (e - a + (a - b - e + f) * tx) * ty - 0.5) * amp;
+      }
+    }
+    for (let i = 0; i < N * N; i++) {
+      // fake relief: light the height field from the upper left
+      const px = i % N, py = (i / N) | 0;
+      const dx = g[py * N + ((px + 1) % N)] - g[py * N + ((px + N - 1) % N)], dy = g[((py + 1) % N) * N + px] - g[((py + N - 1) % N) * N + px];
+      const v = clamp(128 + g[i] * 90 - (dx + dy) * 520 + (rng() - 0.5) * 22, 0, 255);
+      d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255;
+    }
+    x.putImageData(img, 0, 0);
+    // cracks and small stones
+    x.lineCap = 'round';
+    for (let i = 0; i < 26; i++) {
+      let px = rng() * N, py = rng() * N, a = rng() * TAU;
+      x.strokeStyle = 'rgba(40,40,40,' + (0.25 + rng() * 0.3) + ')'; x.lineWidth = 0.6 + rng() * 1.2;
+      x.beginPath(); x.moveTo(px, py);
+      for (let s = 0; s < 9; s++) { a += (rng() - 0.5) * 1.3; px += Math.cos(a) * 9; py += Math.sin(a) * 9; x.lineTo(px, py); }
+      x.stroke();
+    }
+    for (let i = 0; i < 260; i++) {
+      const px = rng() * N, py = rng() * N, r = 0.8 + rng() * 2.6;
+      x.fillStyle = 'rgba(60,60,60,0.5)'; x.beginPath(); x.arc(px + 1, py + 1.2, r, 0, TAU); x.fill();
+      x.fillStyle = 'rgba(190,190,190,0.55)'; x.beginPath(); x.arc(px, py, r * 0.8, 0, TAU); x.fill();
+    }
+    return (this._tile = c);
+  },
+
+  addScorch(x, y, r) {
+    if (!this.scene) return;
+    let m;
+    if (this.scorches.length >= 140) m = this.scorches.shift();
+    else {
+      m = new THREE.Mesh(this.scorchGeo, this.scorchMat);
+      m.rotation.x = -Math.PI / 2; m.renderOrder = 1;
+      this.scene.add(m);
+    }
+    m.position.set(x, 0.4 + this.scorches.length * 0.002, y); m.scale.setScalar(r * 2.3); m.rotation.z = Math.random() * TAU;
+    this.scorches.push(m);
+  },
+
   /* ---------- effect pools ---------- */
   initFx() {
     const dot = document.createElement('canvas'); dot.width = dot.height = 64;
@@ -180,6 +274,8 @@ const Render = {
     gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.4, 'rgba(255,255,255,0.6)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
     dx.fillStyle = gr; dx.fillRect(0, 0, 64, 64);
     const dotTex = new THREE.CanvasTexture(dot);
+    this.scorchGeo = new THREE.PlaneGeometry(1, 1);
+    this.scorchMat = new THREE.MeshBasicMaterial({ map: dotTex, color: 0x0a0808, transparent: true, opacity: 0.6, depthWrite: false });
     const mkPoints = (n, size, add) => {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
@@ -253,7 +349,7 @@ const Render = {
           break;
         }
         case 'puff':
-          if (ns < 700) pt(sp, ns++, f.x, h + (f.rise || 14) * k + 6, f.y, f.dark ? '#2a282e' : '#d2cdc8', (1 - k) * (f.dark ? 0.55 : 0.4));
+          if (ns < 700) pt(sp, ns++, f.x, h + (f.rise || 14) * k + 6, f.y, f.dark ? '#2a282e' : f.dust ? '#a58a72' : '#d2cdc8', (1 - k) * (f.dark ? 0.55 : f.dust ? 0.3 : 0.4));
           break;
         case 'p':
           if (f.glow) { if (ng < 700) pt(gp, ng++, f.x, h + 10 + (f.up || 0) * k, f.y, f.col, 1 - k); }
@@ -325,8 +421,7 @@ const Render = {
     }
     this.drawFx();
     this.fog();
-    if (this.terrDirty && now - this.terrDirty > 1200) { this.terrTex.needsUpdate = true; this.terrDirty = 0; }
-    this.gl.render(this.scene, this.camera);
+    if (this.composer) this.composer.render(); else this.gl.render(this.scene, this.camera);
     this.overlay();
     if (this.frame % 3 === 0) this.minimap();
   },

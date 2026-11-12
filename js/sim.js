@@ -310,6 +310,7 @@ function fire(e, t) {
     case 'bullet': case 'turret': case 'flak':
       damage(t, d.dmg, d.dtype, e);
       if (G.fx.length < 700) {
+        G.fx.push({ type: 'flash', x: mx, y: my, h: hOf(e), t: 0, life: 0.06, r: d.dtype === 'bullet' ? 4.5 : 7 });
         G.fx.push({ type: 'tracer', x: mx, y: my, h: hOf(e), x2: t.x + jx, y2: t.y + jy, h2: hOf(t), t: 0, life: 0.07, col: d.dtype === 'flak' ? '#ffe9a8' : e.team ? '#ffc7a1' : '#c9fff6' });
         if (d.dtype === 'flak') G.fx.push({ type: 'puff', x: t.x + jx * 2, y: t.y + jy * 2, h: hOf(t), t: 0, life: 0.3, r: 9 });
       }
