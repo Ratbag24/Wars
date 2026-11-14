@@ -11,6 +11,7 @@ All models here are public domain (CC0 1.0, see `CC0-1.0.txt`). Credit is not re
 | `robot_flyer_gun.glb` | Quaternius | Kestrel |
 | `speeder_b.glb` | Kenney (kenney.nl), Space Kit | Ranger |
 | `cargo_ship.glb` | Kenney, Space Kit | Condor |
+| `kit_*.glb` | Kenney, Space Kit | All buildings (assembled from kit pieces) |
 
-The files are the meshopt-compressed copies distributed in the `@netforge/asset-library-files` npm package.
+The unit files are the meshopt-compressed copies distributed in the `@netforge/asset-library-files` npm package; the `kit_*` files come from the Space Kit's own GLB export.
 `js/model-data.js` is generated from them by `node tools/pack-models.js` so the game still runs from `file://`.

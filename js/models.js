@@ -73,12 +73,12 @@ const TINT = {
 };
 
 const Assets = {
-  m: {},
+  m: {}, k: {},
   load() {
     return new Promise((res) => {
       const loader = new THREE.GLTFLoader();
       loader.setMeshoptDecoder(MeshoptDecoder);
-      const names = Object.keys(MODELS);
+      const names = Object.keys(MODELS).concat(Object.keys(MODEL_DATA).filter((k) => k.startsWith('kit_')));
       let left = names.length;
       const done = () => { if (!--left) res(); };
       for (const n of names) {
@@ -88,7 +88,38 @@ const Assets = {
       }
     });
   },
+  // Space Kit pieces are stored as plain geometry, recentred and normalised, so buildings can be baked from them
+  prepKit(n, g) {
+    const sc = g.scene, v = new THREE.Vector3();
+    sc.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(sc), size = box.getSize(v.clone()), c = box.getCenter(v.clone());
+    const parts = [];
+    sc.traverse((o) => {
+      if (!o.isMesh) return;
+      const geo = o.geometry.clone().applyMatrix4(o.matrixWorld);
+      geo.translate(-c.x, -box.min.y, -c.z);
+      let node = '';
+      for (let q = o; q; q = q.parent) node += '/' + q.name;
+      parts.push({ g: geo, mat: o.material.name, col: o.material.color.clone().convertLinearToSRGB(), node });
+    });
+    this.k[n.slice(4)] = { parts, h: Math.max(size.x, size.z), y: size.y };
+  },
+  kit(name, team, size, x, y, z, yaw, opt) {
+    const A = this.k[name], T = M3.tc[team], out = [];
+    if (!A) return out;
+    const s = size / (opt && opt.fit === 'y' ? A.y : A.h);
+    const shade = { metal: '#868d98', metalDark: '#59606b', dark: '#262a31', _defaultMat: '#8fe0ff' };
+    for (const p of A.parts) {
+      const isHead = /\/turret(\/|_|$)/.test(p.node);
+      if (opt && opt.only && !isHead) continue;
+      if (opt && opt.not && isHead) continue;
+      const c = p.mat === 'metalRed' ? new THREE.Color(T.main).multiplyScalar(0.92) : shade[p.mat] ? new THREE.Color(shade[p.mat]) : p.col.clone().multiplyScalar(0.6);
+      out.push({ g: p.g.clone().scale(s, s, s), c, p: [x, y, z], r: [0, yaw || 0, 0] });
+    }
+    return out;
+  },
   prep(n, g) {
+    if (n.startsWith('kit_')) return this.prepKit(n, g);
     const cfg = MODELS[n], sc = g.scene, v = new THREE.Vector3();
     // some files ship their own lamps; the game lights the scene itself
     const lamps = [];
@@ -314,64 +345,62 @@ function craftView(u, v) {
   if (condor) v.die = () => { a.obj.traverse((o) => { if (o.isMesh) o.material = WRECK(); }); Render.addCorpse({ holder: body }, { life: 5, fall: true, tumble: true, smoke: true }); };
 }
 
-/* ================= buildings ================= */
+/* ================= buildings (assembled from Kenney Space Kit pieces) ================= */
 function makeBldView(b) {
-  const T = M3.tc[b.team], v = { root: new THREE.Group(), rec: 0 }, R = v.root, k = b.type + ':' + b.team;
+  const T = M3.tc[b.team], t = b.team, v = { root: new THREE.Group(), rec: 0 }, R = v.root, k = b.type + ':' + b.team;
   const base = () => [cyl(29, 31, 4, 6, C_HULL2, 0, 2, 0), cyl(31.5, 31.5, 1.2, 6, T.main, 0, 0.6, 0)];
+  const K = (name, size, x, y, z, yaw, opt) => Assets.kit(name, t, size, x, y, z, yaw, opt);
   let anim = null;
   R.position.set(b.x, PAD_H, b.y);
   switch (b.type) {
     case 'citadel': {
       R.add(M3.mesh(k, () => {
-        const p = [
-          cyl(64, 70, 12, 8, C_HULL2, 0, 6, 0), cyl(66, 66, 2, 8, T.main, 0, 12.5, 0), cyl(50, 56, 16, 8, C_HULL, 0, 21, 0),
-          cyl(34, 40, 20, 8, T.dark, 0, 39, 0), cyl(36, 36, 2.5, 8, T.main, 0, 49.5, 0), cyl(22, 28, 12, 8, C_HULL, 0, 56, 0), cyl(5, 9, 26, 6, C_HULL2, 0, 75, 0),
-        ];
+        let p = [cyl(64, 70, 10, 8, C_HULL2, 0, 5, 0), cyl(66, 66, 2, 8, T.main, 0, 10.5, 0), cyl(50, 54, 5, 8, C_HULL, 0, 13.5, 0)];
+        p = p.concat(K('hangar_roundB', 84, 0, 15, 0, 0), K('rocket_sidesA', 34, 0, 58, 0, 0), K('pipe_ringHigh', 30, 0, 82, 0, 0));
         for (let i = 0; i < 4; i++) {
-          const a = (i / 4) * TAU + TAU / 8, x = Math.cos(a) * 54, z = Math.sin(a) * 54;
-          p.push(box(13, 30, 13, C_HULL2, x, 15, z, 0, -a, 0), box(15, 3, 15, C_DARK, x, 31, z, 0, -a, 0));
-          p.push(box(4, 12, 20, C_GLASS, Math.cos(a) * 45, 34, Math.sin(a) * 45, 0, -a, 0));
+          const a = (i / 4) * TAU + TAU / 8, x = Math.cos(a) * 52, z = Math.sin(a) * 52;
+          p = p.concat(K('structure_closed', 20, x, 10, z, -a), K('machine_wireless', 15, x, 30, z, -a));
         }
-        for (let i = 0; i < 8; i++) { const a = (i / 8) * TAU; p.push(box(3, 10, 8, C_DARK, Math.cos(a) * 53, 20, Math.sin(a) * 53, 0, -a, 0)); }
+        for (let i = 0; i < 4; i++) { const a = (i / 4) * TAU; p = p.concat(K('gate_complex', 26, Math.cos(a) * 55, 10, Math.sin(a) * 55, -a + Math.PI / 2)); }
         return p;
       }));
       const lights = [];
       for (let i = 0; i < 4; i++) {
         const a = (i / 4) * TAU + TAU / 8;
-        const l = M3.mesh('cit-light:' + b.team, () => [box(7, 5, 7, T.light)], true);
-        l.position.set(Math.cos(a) * 54, 35, Math.sin(a) * 54); R.add(l); lights.push(l);
+        const l = M3.mesh('cit-light:' + t, () => [box(5, 4, 5, T.light)], true);
+        l.position.set(Math.cos(a) * 52, 43, Math.sin(a) * 52); R.add(l); lights.push(l);
       }
-      const dish = M3.mesh('cit-dish:' + b.team, () => [box(2, 8, 2, C_DARK, 0, 4, 0), box(3, 12, 26, T.light, 3, 13, 0, 0, 0, -0.35), box(10, 2, 2, C_METAL, 7, 12, 0)]);
-      dish.position.y = 86; R.add(dish);
-      anim = (b) => { dish.rotation.y = b.anim * 1.2; lights.forEach((l, i) => { l.visible = Math.sin(b.anim * 3 + i * 1.6) > -0.3; }); };
+      const dish = M3.mesh('cit-dish:' + t, () => K('satelliteDish_detailed', 34, 0, 0, 0, 0));
+      dish.position.y = 88; R.add(dish);
+      const core = M3.mesh('cit-core:' + t, () => [cyl(9, 9, 5, 8, T.light, 0, 0, 0)], true);
+      core.position.y = 86; R.add(core);
+      anim = (b) => { dish.rotation.y = b.anim * 0.7; lights.forEach((l, i) => { l.visible = Math.sin(b.anim * 3 + i * 1.6) > -0.3; }); };
       break;
     }
     case 'depot': {
-      R.add(M3.mesh(k, () => base().concat([
-        box(11, 9, 11, C_CRATE, -10, 8.5, -8), box(11, 9, 11, C_CRATE, 3, 8.5, -10, 0, 0.3, 0), box(11, 9, 11, C_CRATE, -9, 8.5, 6, 0, -0.2, 0),
-        box(10, 8, 10, '#b98d42', -6, 17, -3, 0, 0.5, 0), box(11.4, 2, 11.4, T.main, -10, 10, -8), box(11.4, 2, 11.4, T.main, -9, 10, 6, 0, -0.2, 0),
-        cyl(8, 8, 12, 8, C_HULL, 12, 10, 9), cyl(8.4, 8.4, 2, 8, T.main, 12, 13, 9), cyl(2.5, 3, 30, 6, C_DARK, 15, 19, -12),
-      ])));
-      const crane = M3.mesh('depot-crane:' + b.team, () => [box(24, 2.4, 2.4, '#e3b341', -8, 0, 0), box(5, 4, 4, C_DARK, 4, 0, 0), box(0.6, 12, 0.6, C_DARK, -18, -6, 0), box(4, 3, 4, C_CRATE, -18, -13, 0)]);
-      crane.position.set(15, 34, -12); R.add(crane);
-      const heavy = M3.mesh('depot-heavy:' + b.team, () => [box(11, 9, 11, C_CRATE, 6, 8.5, 22, 0, 0.2, 0), box(10, 8, 10, '#b98d42', 4, 17, -9, 0, -0.3, 0), cyl(33, 33, 1.6, 6, '#ffd66b', 0, 3.4, 0), cyl(5, 5, 14, 8, T.light, 12, 23, 9)]);
+      R.add(M3.mesh(k, () => base().concat(
+        K('machine_barrelLarge', 26, -8, 4, -9, 0.4), K('barrels_rail', 24, 9, 4, 9, 0), K('monorail_trainCargo', 22, -12, 4, 11, 1.2), K('machine_barrel', 17, 13, 4, -12, 2.2),
+      )));
+      const heavy = M3.mesh('depot-heavy:' + t, () => [cyl(33, 33, 1.6, 6, '#ffd66b', 0, 3.4, 0)].concat(K('machine_barrelLarge', 18, 0, 4, 0, 1.6), K('satelliteDish_large', 14, -19, 4, -1, 0.5)));
       R.add(heavy);
-      anim = (b) => { crane.rotation.y = Math.sin(b.anim * 0.5) * 1.3 + 2.2; heavy.visible = b.level > 1; };
+      const lamp = M3.mesh('lamp:' + t, () => [box(3, 3, 3, T.light)], true);
+      lamp.position.set(-8, 30, -9); R.add(lamp);
+      anim = (b) => { heavy.visible = b.level > 1; lamp.visible = Math.sin(b.anim * 2.5) > 0; };
       break;
     }
     case 'reactor': {
       R.add(M3.mesh(k, () => {
-        const p = base().concat([cyl(17, 20, 9, 8, C_HULL, 0, 8.5, 0), cyl(11, 13, 4, 8, C_DARK, 0, 15, 0)]);
-        for (let i = 0; i < 3; i++) { const a = (i / 3) * TAU; p.push(box(5, 30, 5, C_HULL2, Math.cos(a) * 20, 18, Math.sin(a) * 20, 0, -a, 0), box(9, 3, 5, T.main, Math.cos(a) * 17.5, 33, Math.sin(a) * 17.5, 0, -a, 0)); }
+        let p = base().concat(K('rocket_sidesA', 34, 0, 4, 0, 0), cyl(11, 13, 3, 8, C_DARK, 0, 38, 0));
+        for (let i = 0; i < 3; i++) { const a = (i / 3) * TAU + 0.5; p = p.concat(K('machine_generator', 17, Math.cos(a) * 20, 4, Math.sin(a) * 20, -a + Math.PI / 2)); }
         return p;
       }));
       const core = M3.mesh('reactor-core', () => [ball(8, '#8fe9ff')], true);
       const halo = new THREE.Mesh(M3.cache['reactor-core'], new THREE.MeshBasicMaterial({ color: 0x4fc8ff, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false }));
-      core.position.y = halo.position.y = 26; R.add(core, halo);
+      core.position.y = halo.position.y = 50; R.add(core, halo);
       const rings = [];
       for (let i = 0; i < 2; i++) {
         const r = new THREE.Mesh(M3.cache['torus'] || (M3.cache['torus'] = new THREE.TorusGeometry(13, 1.1, 5, 18)), new THREE.MeshPhongMaterial({ color: T.main, flatShading: true, emissive: T.dark }));
-        r.position.y = 26; r.castShadow = true; R.add(r); rings.push(r);
+        r.position.y = 50; r.castShadow = true; R.add(r); rings.push(r);
       }
       anim = (b) => {
         const p = 1 + Math.sin(b.anim * 4) * 0.12;
@@ -381,62 +410,58 @@ function makeBldView(b) {
       break;
     }
     case 'barracks': {
-      R.add(M3.mesh(k, () => base().concat([
-        box(38, 14, 28, T.dark, 0, 11, 0), box(40, 3, 30, C_HULL2, 0, 19.5, 0), box(30, 4, 20, C_HULL, 0, 23, 0), box(1, 9, 9, C_DARK, 19.2, 8.5, 0),
-        box(1, 3, 22, C_GLASS, 19.2, 15.5, 0), box(40.4, 2, 4, T.main, 0, 14, -12), box(40.4, 2, 4, T.main, 0, 14, 12),
-        box(8, 6, 8, C_HULL2, -10, 28, -4), box(1, 18, 1, C_DARK, -12, 33, 6), box(10, 10, 3, C_HULL2, 22, 6, -11, 0, 0.4, 0), box(10, 10, 3, C_HULL2, 22, 6, 11, 0, -0.4, 0),
-      ])));
-      const flag = M3.mesh('flag:' + b.team, () => [box(9, 5, 0.5, T.main, 4.5, 0, 0)]);
-      flag.position.set(-12, 39, 6); R.add(flag);
-      const lamp = M3.mesh('lamp:' + b.team, () => [box(3, 3, 3, T.light)], true);
-      lamp.position.set(19.5, 15, 0); R.add(lamp);
+      R.add(M3.mesh(k, () => base().concat(
+        K('hangar_smallA', 46, 0, 4, -2, Math.PI / 2), K('machine_wireless', 14, -14, 4, 20, 0.6), K('satelliteDish_large', 13, 14, 27, -8, 1), box(1, 20, 1, C_DARK, -16, 36, -12),
+        box(34, 0.8, 5, T.main, 0, 27.3, -2), box(5, 0.8, 30, T.main, 12, 27.3, -2),
+      )));
+      const flag = M3.mesh('flag:' + t, () => [box(10, 6, 0.5, T.main, 5, 0, 0)]);
+      flag.position.set(-16, 43, -12); R.add(flag);
+      const lamp = M3.mesh('lamp:' + t, () => [box(3, 3, 3, T.light)], true);
+      lamp.position.set(24, 16, -2); R.add(lamp);
       anim = (b) => { flag.rotation.y = Math.sin(b.anim * 3) * 0.35; flag.scale.x = 1 + Math.sin(b.anim * 7) * 0.06; lamp.visible = !b.queue.length || Math.sin(b.anim * 10) > 0; };
       break;
     }
     case 'foundry': {
-      R.add(M3.mesh(k, () => base().concat([
-        box(38, 18, 30, C_HULL, 0, 13, 0), box(40, 3, 32, T.main, 0, 23, 0), box(24, 6, 32.4, C_HULL2, -4, 27, 0, 0, 0, 0.2),
-        box(1, 13, 16, C_DARK, 19.2, 10.5, 0), box(1.4, 2, 18, '#e3b341', 19.4, 18, 0),
-        cyl(3.4, 4, 26, 8, C_HULL2, -12, 36, -9), cyl(3.4, 4, 22, 8, C_HULL2, -12, 34, 3), cyl(4.4, 4.4, 2, 8, C_DARK, -12, 49, -9), cyl(4.4, 4.4, 2, 8, C_DARK, -12, 45, 3),
-        box(10, 8, 12, T.dark, 8, 30, 6),
-      ])));
-      const gear = M3.mesh('gear', () => { const p = [cyl(8, 8, 2.4, 10, C_METAL, 0, 0, 0, Math.PI / 2), cyl(3, 3, 3.4, 8, C_DARK, 0, 0, 0, Math.PI / 2)]; for (let i = 0; i < 6; i++) p.push(box(3.2, 20, 2.4, C_METAL, 0, 0, 0, 0, 0, (i / 6) * Math.PI)); return p; });
-      gear.position.set(6, 16, -16.6); gear.scale.setScalar(0.8); R.add(gear);
+      R.add(M3.mesh(k, () => base().concat(
+        K('hangar_largeB', 54, 2, 4, 0, Math.PI / 2), K('chimney_detailed', 40, -18, 4, -15, 0, { fit: 'y' }), K('chimney_detailed', 32, -18, 4, 15, 0, { fit: 'y' }), K('machine_generatorLarge', 18, -4, 22, 0, 0),
+        box(6, 0.8, 34, T.main, 16, 24.2, 0), box(6, 0.8, 34, '#e3b341', 24, 24.2, 0),
+      )));
+      const lamp = M3.mesh('lamp-y', () => [box(3, 3, 3, '#ffd66b')], true);
+      lamp.position.set(29, 14, 0); R.add(lamp);
       v.smoke = 0;
       anim = (b, dt) => {
-        gear.rotation.z += dt * (b.queue.length ? 3 : 0.3);
+        lamp.visible = b.queue.length > 0 && Math.sin(b.anim * 12) > 0;
         if (b.queue.length && !b.building && (v.smoke -= dt) <= 0 && G.fx.length < 700) {
           v.smoke = 0.22;
-          G.fx.push({ type: 'puff', x: b.x - 12, y: b.y - 9 + (Math.random() < 0.5 ? 12 : 0), h: 60, rise: 50, t: 0, life: 1.3, r: 9, dark: true });
+          G.fx.push({ type: 'puff', x: b.x - 18, y: b.y + (Math.random() < 0.5 ? -15 : 15), h: 50, rise: 50, t: 0, life: 1.3, r: 9, dark: true });
         }
       };
       break;
     }
     case 'skyport': {
-      R.add(M3.mesh(k, () => base().concat([
-        cyl(25, 26, 4, 12, C_DARK, 0, 6, 0), cyl(20, 20, 0.8, 12, T.main, 0, 8.2, 0), cyl(16, 16, 1, 12, C_HULL2, 0, 8.4, 0),
-        box(22, 0.6, 3, '#e6edf2', 0, 9.1, 0), box(3, 0.6, 14, '#e6edf2', -9, 9.1, 0), box(3, 0.6, 14, '#e6edf2', 9, 9.1, 0),
-        box(7, 30, 7, C_HULL, -21, 19, -14), box(10, 6, 10, C_GLASS, -21, 36, -14), box(11, 1.6, 11, T.main, -21, 40, -14), box(1, 9, 1, C_DARK, -21, 45, -14),
-      ])));
-      const beacon = M3.mesh('beacon:' + b.team, () => [box(9, 1.6, 1.6, T.light, 3, 0, 0), box(2, 2, 2, C_DARK)]);
-      beacon.position.set(-21, 50, -14); R.add(beacon);
+      R.add(M3.mesh(k, () => base().concat(
+        cyl(27, 28, 3, 12, C_DARK, 0, 5.5, 0), cyl(22, 22, 0.8, 12, T.main, 0, 7.2, 0),
+        K('hangar_roundGlass', 40, 4, 7, 4, 0), K('platform_low', 18, -17, 4, -15, 0), box(5, 22, 5, C_HULL, -17, 24, -15), box(8, 5, 8, C_GLASS, -17, 37, -15), box(9, 1.4, 9, T.main, -17, 40.2, -15),
+      )));
+      const beacon = M3.mesh('beacon:' + t, () => [box(9, 1.6, 1.6, T.light, 3, 0, 0), box(2, 2, 2, C_DARK)]);
+      beacon.position.set(-17, 43, -15); R.add(beacon);
       const lights = [];
       for (let i = 0; i < 6; i++) {
         const a = (i / 6) * TAU, l = M3.mesh('padlight', () => [box(2.4, 1.6, 2.4, '#ffffff')], true);
-        l.position.set(Math.cos(a) * 23, 9, Math.sin(a) * 23); R.add(l); lights.push(l);
+        l.position.set(Math.cos(a) * 25, 8, Math.sin(a) * 25); R.add(l); lights.push(l);
       }
       anim = (b) => { beacon.rotation.y = b.anim * 2.5; const s = Math.floor(b.anim * (b.queue.length ? 9 : 3)); lights.forEach((l, i) => { l.visible = (s + i) % 3 === 0; }); };
       break;
     }
     case 'turret': {
-      R.add(M3.mesh(k, () => base().concat([cyl(13, 17, 9, 8, C_HULL, 0, 8.5, 0), cyl(9, 9, 5, 8, C_DARK, 0, 15, 0)])));
-      const head = M3.mesh('turret-head:' + b.team, () => [box(17, 9, 15, T.main, -1, 5, 0), box(6, 7, 17, T.dark, -6, 5.5, 0), box(5, 5, 9, C_HULL2, 9, 5, 0), box(2, 3, 2, C_GLASS, 2, 10.5, 4)]);
-      const barrels = M3.mesh('turret-bar', () => [cylX(1.5, 22, 6, C_METAL, 18, 5.4, -4), cylX(1.5, 22, 6, C_METAL, 18, 5.4, 4), box(3, 4, 12, C_DARK, 27, 5.4, 0)]);
-      head.position.y = 17; head.add(barrels); R.add(head);
+      R.add(M3.mesh(k, () => base().concat(cyl(15, 19, 5, 8, C_HULL, 0, 6.5, 0), K('turret_double', 34, 0, 9, 0, 0, { not: 'turret' }))));
+      const head = new THREE.Group();
+      const gun = M3.mesh('turret-head:' + t, () => K('turret_double', 34, 0, 9, 0, -Math.PI / 2, { only: 'turret' }));
+      head.add(gun); R.add(head);
       anim = (b, dt) => {
         if (firedNow(v, b)) v.rec = 1;
         v.rec = Math.max(0, v.rec - dt * 12);
-        head.rotation.y = -b.aim; barrels.position.x = -v.rec * 2.5;
+        head.rotation.y = -b.aim; gun.position.x = -v.rec * 2.5;
       };
       break;
     }
